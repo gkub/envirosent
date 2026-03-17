@@ -1,0 +1,18 @@
+# PlatformIO
+.pio/
+.piolibdeps/
+
+# VS Code
+.vscode/
+
+# ESP-IDF / build artifacts
+build/
+sdkconfig
+sdkconfig.old
+
+# macOS
+.DS_Store
+
+# Python/cache junk
+__pycache__/
+*.pyc

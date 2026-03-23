@@ -6,7 +6,7 @@
 
 #include "app.h"
 #include "i2cscanner.h"
-
+#include "sensors.h"
 
 SemaphoreHandle_t i2c_mutex;
 QueueHandle_t sensor_queue;
@@ -14,27 +14,44 @@ static uint32_t t = 0;
 
 void sensor_task(void *pvParameters) {
     while (1) {
-        sensor_sample_t sample;
-        sample.lux = 100;
-        sample.temperature = 20;
-        sample.humidity = 50;
-        sample.pressure = 1013;
-        sample.timestamp = t;
-        if (xQueueSend(sensor_queue, &sample, 0) != pdTRUE) {
-            printf("Queue full, dropping sample\n");
+        if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(100)) == pdTRUE) { // take the mutex
+            sensor_sample_t sample; // create a sample
+            bool ok_lux = bh1750_read_lux(&sample.lux); // read the lux
+            bool ok_bme = bme280_read_environment( // read the environment
+                &sample.temperature, 
+                &sample.humidity, 
+                &sample.pressure); 
+            xSemaphoreGive(i2c_mutex); // release the mutex
+
+            if (ok_lux && ok_bme) { // if the lux and environment readings are successful
+                sample.timestamp = t; // set the timestamp
+                if (xQueueSend(sensor_queue, &sample, 0) != pdTRUE) { // if the queue is full, drop the sample
+                    printf("Queue full, dropping sample\n");
+                }
+                else {
+                    printf("Sample sent to queue\n");
+                    t += 1000;
+                }
+            } else {
+                printf("Error reading sensors\n");
+            }
+        } else {
+            printf("Error taking mutex\n");
         }
-        printf("sensor task alive\n");
-        vTaskDelay(pdMS_TO_TICKS(1000));
-        t++;
+        vTaskDelay(pdMS_TO_TICKS(1000)); // wait 1 second
     }
 }
 
 void display_task(void *pvParameters) {
     while (1) {
-        printf("display task alive\n");
         sensor_sample_t sample;
-        xQueueReceive(sensor_queue, &sample, portMAX_DELAY);
-        printf("display task received sample: %f, %f, %f, %f, %lu\n", sample.lux, sample.temperature, sample.humidity, sample.pressure, sample.timestamp);
+        if (xQueueReceive(sensor_queue, &sample, portMAX_DELAY) == pdTRUE) {
+            printf("display task received sample: Lux: %f, Temp: %f, Hum: %f, Press: %f, Timestamp: %lu\n", sample.lux, sample.temperature, sample.humidity, sample.pressure, (unsigned long)sample.timestamp);
+        }
+        else {
+            printf("Queue empty, waiting for sample\n");
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000)); // wait 1 second
     }
 }
 

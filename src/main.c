@@ -6,71 +6,170 @@
 
 #include "app.h"
 #include "i2cscanner.h"
-#include "sensors.h"
+#include "sensors.h"   // <-- needed so main.c knows the sensor function prototypes
 
 SemaphoreHandle_t i2c_mutex;
 QueueHandle_t sensor_queue;
+
+// Simple fake timestamp counter for now.
+// We can later replace this with xTaskGetTickCount() or a real time base.
 static uint32_t t = 0;
 
-void sensor_task(void *pvParameters) {
-    while (1) {
-        if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(100)) == pdTRUE) { // take the mutex
-            sensor_sample_t sample; // create a sample
-            bool ok_lux = bh1750_read_lux(&sample.lux); // read the lux
-            bool ok_bme = bme280_read_environment( // read the environment
-                &sample.temperature, 
-                &sample.humidity, 
-                &sample.pressure); 
-            xSemaphoreGive(i2c_mutex); // release the mutex
+void sensor_task(void *pvParameters)
+{
+    // Silence "unused parameter" warnings since we are not using pvParameters right now.
+    (void) pvParameters;
 
-            if (ok_lux && ok_bme) { // if the lux and environment readings are successful
-                sample.timestamp = t; // set the timestamp
-                if (xQueueSend(sensor_queue, &sample, 0) != pdTRUE) { // if the queue is full, drop the sample
+    while (1) {
+        // One sample struct per loop iteration.
+        sensor_sample_t sample;
+
+        /*
+         * Acquire exclusive ownership of the I2C bus.
+         *
+         * This is important because eventually multiple tasks will want to use:
+         *   - BH1750
+         *   - BME280
+         *   - OLED
+         *
+         * Without a mutex, their bus transactions could overlap and corrupt each other.
+         */
+        if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+
+            /*
+             * Call into the sensor module to perform actual sensor reads.
+             *
+             * Notice:
+             * - main.c decides WHEN to lock and read
+             * - sensors.c knows HOW to talk to the hardware
+             *
+             * This is good separation of concerns.
+             */
+            bool ok_lux = bh1750_read_lux(&sample.lux);
+            bool ok_bme = bme280_read_environment(
+                &sample.temperature,
+                &sample.humidity,
+                &sample.pressure
+            );
+
+            // Release the bus as soon as we are done with I2C operations.
+            xSemaphoreGive(i2c_mutex);
+
+            if (ok_lux && ok_bme) {
+                // Fill the timestamp after successful reads.
+                sample.timestamp = t;
+
+                /*
+                 * Send the sample to the queue.
+                 *
+                 * Why '&sample'?
+                 * Because xQueueSend expects a POINTER to the data to copy.
+                 *
+                 * The queue copies sizeof(sensor_sample_t) bytes into its own storage.
+                 * It does not keep a pointer to this stack variable.
+                 */
+                if (xQueueSend(sensor_queue, &sample, 0) != pdTRUE) {
                     printf("Queue full, dropping sample\n");
-                }
-                else {
+                } else {
                     printf("Sample sent to queue\n");
+
+                    // Advance our fake timestamp by 1000 each 1-second cycle.
                     t += 1000;
                 }
             } else {
-                printf("Error reading sensors\n");
+                printf("Sensor read failed\n");
             }
         } else {
-            printf("Error taking mutex\n");
+            printf("Failed to acquire I2C mutex\n");
         }
-        vTaskDelay(pdMS_TO_TICKS(1000)); // wait 1 second
+
+        // Sample once per second.
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 
-void display_task(void *pvParameters) {
+void display_task(void *pvParameters)
+{
+    (void) pvParameters;
+
     while (1) {
         sensor_sample_t sample;
+
+        /*
+         * Block until a sample arrives.
+         *
+         * This is the producer/consumer RTOS pattern we wanted to implement:
+         * - sensor_task produces data periodically
+         * - display_task sleeps until work exists
+         *
+         * portMAX_DELAY means:
+         *   "Wait indefinitely until a queue item becomes available."
+         */
         if (xQueueReceive(sensor_queue, &sample, portMAX_DELAY) == pdTRUE) {
-            printf("display task received sample: Lux: %f, Temp: %f, Hum: %f, Press: %f, Timestamp: %lu\n", sample.lux, sample.temperature, sample.humidity, sample.pressure, (unsigned long)sample.timestamp);
+            printf(
+                "display task received sample: "
+                "Lux: %f, Temp: %f, Hum: %f, Press: %f, Timestamp: %lu\n",
+                sample.lux,
+                sample.temperature,
+                sample.humidity,
+                sample.pressure,
+                (unsigned long) sample.timestamp
+            );
         }
-        else {
-            printf("Queue empty, waiting for sample\n");
-        }
-        vTaskDelay(pdMS_TO_TICKS(1000)); // wait 1 second
     }
 }
 
 void app_main(void)
 {
     printf("Room Sentinel booting...\n");
+
+    // Bring up the ESP32 I2C peripheral.
     i2c_master_init();
+
+    // Scan the bus just to confirm our devices are present.
     i2c_scanner();
 
+    // Create the mutex that protects access to the shared I2C bus.
     i2c_mutex = xSemaphoreCreateMutex();
     if (i2c_mutex == NULL) {
         printf("ERROR: Failed to create I2C mutex\n");
-        while (1);  // halt
+        while (1) {
+            // Halt forever if a critical RTOS object could not be created.
+        }
     }
+
+    // Create the queue that carries sensor_sample_t from sensor_task to display_task.
     sensor_queue = xQueueCreate(16, sizeof(sensor_sample_t));
     if (sensor_queue == NULL) {
         printf("ERROR: Failed to create sensor queue\n");
-        while (1);  // halt
+        while (1) {
+            // Halt forever if queue creation failed.
+        }
     }
-    xTaskCreate(sensor_task, "sensor_task", 4096, NULL, 2, NULL); // priority 2
-    xTaskCreate(display_task, "display_task", 4096, NULL, 1, NULL); // priority 1
+
+    /*
+     * Initialize BH1750 under mutex protection.
+     *
+     * Why under the mutex?
+     * Because initialization itself uses the I2C bus, and we want to keep a
+     * consistent ownership rule:
+     *   any I2C bus use happens while holding i2c_mutex
+     */
+    if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        if (bh1750_init()) {
+            printf("BH1750 initialized successfully\n");
+        } else {
+            printf("ERROR: Failed to initialize BH1750\n");
+        }
+
+        xSemaphoreGive(i2c_mutex);
+    } else {
+        printf("ERROR: Failed to acquire I2C mutex for BH1750 init\n");
+    }
+
+    // Create the producer task.
+    xTaskCreate(sensor_task, "sensor_task", 4096, NULL, 2, NULL);
+
+    // Create the consumer task.
+    xTaskCreate(display_task, "display_task", 4096, NULL, 1, NULL);
 }

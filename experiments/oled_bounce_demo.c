@@ -36,7 +36,7 @@
 // Most 0.96" SSD1306 I2C modules use address 0x3C.
 #define SSD1306_ADDR 0x3C
 
-// Display resolution of your module.
+// Display resolution of our OLED module.
 #define SSD1306_WIDTH 128
 #define SSD1306_HEIGHT 64
 
@@ -244,14 +244,14 @@ static void oled_animation_task(void *pvParameters)
         }
 
         // Let other tasks (and the idle task) run.
-        // From your point of view: this is the frame rate control.
+        // From our point of view: this is the frame rate control.
         vTaskDelay(pdMS_TO_TICKS(30)); // ~33 FPS
     }
 }
 
 // This task only writes to the serial port.
 // It runs at the same time as the OLED task, but with a slower loop so
-// you can clearly see both tasks making progress.
+// we can clearly see both tasks making progress.
 static void serial_demo_task(void *pvParameters)
 {
     (void)pvParameters; // unused

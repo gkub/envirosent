@@ -13,8 +13,8 @@
  * I2C bus / timeout configuration
  * ============================================================================
  *
- * These values match the I2C peripheral you already initialized in i2cscanner.c.
- * Your bus is using I2C_NUM_0 on GPIO 21/22, so we use I2C_NUM_0 here too.
+ * These values match the I2C peripheral we already initialized in i2cscanner.c.
+ * Our bus is using I2C_NUM_0 on GPIO 21/22, so we use I2C_NUM_0 here too.
  */
 
 #define I2C_PORT          I2C_NUM_0
@@ -35,7 +35,7 @@
  * ============================================================================
  *
  * BME280 can appear at 0x76 or 0x77 depending on SDO wiring.
- * Your scan showed 0x76, so we use that.
+ * Our scan showed 0x76, so we use that.
  */
 
 #define BME280_ADDR 0x76
@@ -172,7 +172,7 @@ static bool i2c_write_reg(uint8_t dev_addr, uint8_t reg_addr, uint8_t value)
  *
  * Why repeated START?
  * Because many I2C devices expect:
- *   first, tell me which register you want
+ *   first, tell me which register we want
  *   then, without releasing the bus, switch into read mode
  *
  * 'data' is the destination buffer

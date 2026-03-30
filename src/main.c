@@ -6,7 +6,8 @@
 
 #include "app.h"
 #include "i2cscanner.h"
-#include "sensors.h"   // <-- needed so main.c knows the sensor function prototypes
+#include "sensors.h"
+#include "display.h"
 
 SemaphoreHandle_t i2c_mutex;
 QueueHandle_t sensor_queue;
@@ -74,7 +75,7 @@ void sensor_task(void *pvParameters)
                     printf("Sample sent to queue\n");
 
                     // Advance our fake timestamp by 1000 each 1-second cycle.
-                    t += 1000;
+                    t += 1;
                 }
             } else {
                 printf("Sensor read failed\n");
@@ -95,16 +96,6 @@ void display_task(void *pvParameters)
     while (1) {
         sensor_sample_t sample;
 
-        /*
-         * Block until a sample arrives.
-         *
-         * This is the producer/consumer RTOS pattern we wanted to implement:
-         * - sensor_task produces data periodically
-         * - display_task sleeps until work exists
-         *
-         * portMAX_DELAY means:
-         *   "Wait indefinitely until a queue item becomes available."
-         */
         if (xQueueReceive(sensor_queue, &sample, portMAX_DELAY) == pdTRUE) {
             printf(
                 "display task received sample: "
@@ -115,6 +106,17 @@ void display_task(void *pvParameters)
                 sample.pressure,
                 (unsigned long) sample.timestamp
             );
+
+            // OLED shares the same I2C bus as your sensors.
+            if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                if (!display_show_sample(&sample)) {
+                    printf("ERROR: OLED update failed\n");
+                }
+
+                xSemaphoreGive(i2c_mutex);
+            } else {
+                printf("ERROR: Failed to acquire I2C mutex for OLED update\n");
+            }
         }
     }
 }
@@ -152,10 +154,14 @@ void app_main(void)
         } else {
             printf("ERROR: Failed to initialize BME280\n");
         }
-
+        if (display_init()) {
+            printf("OLED display initialized successfully\n");
+        } else {
+            printf("ERROR: Failed to initialize OLED\n");
+        }
         xSemaphoreGive(i2c_mutex);
     } else {
-        printf("ERROR: Failed to acquire I2C mutex for sensor init\n");
+        printf("ERROR: Failed to acquire I2C mutex for device initialization\n");
     }
 
     xTaskCreate(sensor_task, "sensor_task", 4096, NULL, 2, NULL);

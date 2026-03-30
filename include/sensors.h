@@ -4,16 +4,23 @@
 #include <stdbool.h>
 
 // Initialize the BH1750 light sensor.
-// Returns true if the sensor acknowledged the init command.
+// Returns true if initialization succeeded.
 bool bh1750_init(void);
 
-// Read the current lux value from the BH1750.
-// Writes the lux value into *lux_out on success.
-// Returns true on success, false on failure.
+// Read current lux value from BH1750.
+// Writes result into *lux_out and returns true on success.
 bool bh1750_read_lux(float *lux_out);
 
-// Stubbed for now. Later these will become real.
+// Initialize the BME280 environmental sensor.
+// This will:
+//   - verify the chip ID
+//   - read factory calibration coefficients
+//   - configure oversampling / mode registers
 bool bme280_init(void);
+
+// Read temperature / humidity / pressure from the BME280.
+// Writes results into the provided output pointers.
+// Returns true on success, false on failure.
 bool bme280_read_environment(float *temp_out, float *hum_out, float *press_out);
 
 #endif

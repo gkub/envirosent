@@ -123,38 +123,23 @@ void app_main(void)
 {
     printf("Room Sentinel booting...\n");
 
-    // Bring up the ESP32 I2C peripheral.
     i2c_master_init();
-
-    // Scan the bus just to confirm our devices are present.
     i2c_scanner();
 
-    // Create the mutex that protects access to the shared I2C bus.
     i2c_mutex = xSemaphoreCreateMutex();
     if (i2c_mutex == NULL) {
         printf("ERROR: Failed to create I2C mutex\n");
         while (1) {
-            // Halt forever if a critical RTOS object could not be created.
         }
     }
 
-    // Create the queue that carries sensor_sample_t from sensor_task to display_task.
     sensor_queue = xQueueCreate(16, sizeof(sensor_sample_t));
     if (sensor_queue == NULL) {
         printf("ERROR: Failed to create sensor queue\n");
         while (1) {
-            // Halt forever if queue creation failed.
         }
     }
 
-    /*
-     * Initialize BH1750 under mutex protection.
-     *
-     * Why under the mutex?
-     * Because initialization itself uses the I2C bus, and we want to keep a
-     * consistent ownership rule:
-     *   any I2C bus use happens while holding i2c_mutex
-     */
     if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         if (bh1750_init()) {
             printf("BH1750 initialized successfully\n");
@@ -162,14 +147,17 @@ void app_main(void)
             printf("ERROR: Failed to initialize BH1750\n");
         }
 
+        if (bme280_init()) {
+            printf("BME280 initialized successfully\n");
+        } else {
+            printf("ERROR: Failed to initialize BME280\n");
+        }
+
         xSemaphoreGive(i2c_mutex);
     } else {
-        printf("ERROR: Failed to acquire I2C mutex for BH1750 init\n");
+        printf("ERROR: Failed to acquire I2C mutex for sensor init\n");
     }
 
-    // Create the producer task.
     xTaskCreate(sensor_task, "sensor_task", 4096, NULL, 2, NULL);
-
-    // Create the consumer task.
     xTaskCreate(display_task, "display_task", 4096, NULL, 1, NULL);
 }
